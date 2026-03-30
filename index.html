@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pipeline Waterfall</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#fff;font-family:-apple-system,system-ui,sans-serif;min-height:100vh;display:flex;justify-content:center;padding:32px 16px}
+.wrap{max-width:1200px;width:100%}
+h1{font-size:22px;font-weight:700;margin-bottom:4px;opacity:.9}
+.sub{font-size:13px;opacity:.35;margin-bottom:24px}
+.chart-wrap{background:#12121a;border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow-x:auto;position:relative}
+svg text{font-family:-apple-system,system-ui,sans-serif}
+.tip{position:absolute;pointer-events:none;background:#1e1e2e;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:8px 12px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .15s}
+.tip.show{opacity:1}
+.tip b{display:block;color:#fff;margin-bottom:2px}
+.tip span{color:#34d399}
+.bar{cursor:pointer;transition:opacity .15s}
+.bar:hover{opacity:.75}
+.foot{margin-top:20px;font-size:11px;opacity:.2}
+.loading{text-align:center;padding:80px 0;opacity:.5;font-size:14px}
+.error{text-align:center;padding:40px;color:#f87171;font-size:13px}
+.refresh{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:rgba(255,255,255,.6);font-size:12px;cursor:pointer;transition:background .15s;margin-left:16px}
+.refresh:hover{background:rgba(255,255,255,.14)}
+.ts{font-size:11px;opacity:.25;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+<h1>Pipeline Volume (3mo) — Waterfall</h1>
+<button class="refresh" onclick="load()">↻ Refresh</button>
+</div>
+<p class="sub">Live from spreadsheet · Column B (Customer) × Column F (Volume 3mo)</p>
+<div class="chart-wrap" id="cw">
+<div class="tip" id="tip"><b id="tn"></b><span id="tv"></span></div>
+<div class="loading" id="loader">Loading spreadsheet data…</div>
+<svg id="svg" style="display:none"></svg>
+</div>
+<p class="ts" id="ts"></p>
+<p class="foot">Source: <a href="https://docs.google.com/spreadsheets/d/1lgKZ_cdguX1fmtjYc2IOopPHubRbBIivocgpXViT2P8/edit?gid=1634419146#gid=1634419146" style="color:inherit;text-decoration:underline" target="_blank">Pipeline spreadsheet</a></p>
+</div>
+<script>
+const SHEET_ID='1lgKZ_cdguX1fmtjYc2IOopPHubRbBIivocgpXViT2P8';
+const GID='1634419146';
+const svg=document.getElementById('svg');
+const cw=document.getElementById('cw');
+const tip=document.getElementById('tip');
+const tn=document.getElementById('tn');
+const tv=document.getElementById('tv');
+const loader=document.getElementById('loader');
+
+function parseCSV(text){
+  const rows=[];let row=[],field='',inQ=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i],n=text[i+1];
+    if(inQ){if(c==='"'&&n==='"'){field+='"';i++}else if(c==='"'){inQ=false}else{field+=c}}
+    else{if(c==='"'){inQ=true}else if(c===','){row.push(field);field=''}else if(c==='\n'||(c==='\r'&&n==='\n')){if(c==='\r')i++;row.push(field);rows.push(row);row=[];field=''}else if(c==='\r'){row.push(field);rows.push(row);row=[];field=''}else{field+=c}}
+  }
+  if(field||row.length)row.push(field),rows.push(row);
+  return rows;
+}
+
+async function fetchData(){
+  const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}&cachebust=${Date.now()}`;
+  const resp=await fetch(url);
+  if(!resp.ok) throw new Error('Failed to fetch spreadsheet');
+  const text=await resp.text();
+  const rows=parseCSV(text);
+  
+  // Find data rows: header at row index 2, data starts at 3
+  // Col B (index 1) = name, Col F (index 5) = value
+  const data=[];
+  for(let i=3;i<rows.length;i++){
+    const row=rows[i];
+    if(!row||row.length<6) continue;
+    const name=row[1]?.trim();
+    let valStr=row[5]?.trim();
+    if(!name||!valStr||valStr==='$0'||valStr==='N/A'||valStr==='') continue;
+    const val=parseFloat(valStr.replace(/[$,]/g,''));
+    if(!isNaN(val)&&val>0) data.push({name,value:val});
+  }
+  data.sort((a,b)=>b.value-a.value);
+  return data;
+}
+
+const fmt=v=>v>=1e6?`$${(v/1e6).toFixed(1)}M`:v>=1e3?`$${(v/1e3).toFixed(0)}K`:`$${v}`;
+const fmtF=v=>'$'+v.toLocaleString('en-US');
+
+function draw(D){
+  const TOTAL=D.reduce((s,d)=>s+d.value,0);
+  const M={t:60,r:30,b:120,l:80};
+  const W=Math.max(cw.clientWidth,700),H=Math.max(500,Math.min(650,W*.48));
+  svg.setAttribute('width',W);svg.setAttribute('height',H);svg.innerHTML='';
+  const cW=W-M.l-M.r,cH=H-M.t-M.b;
+  const n=D.length+1,gap=cW/n,bw=Math.min(gap*.7,48);
+  const sc=v=>(v/TOTAL)*cH;
+
+  const defs=`<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient>
+  <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#2563eb"/></linearGradient>
+  </defs>`;
+
+  let grid='';
+  for(let i=0;i<=5;i++){const v=TOTAL/5*i,y=M.t+cH-sc(v);
+  grid+=`<line x1="${M.l}" x2="${W-M.r}" y1="${y}" y2="${y}" stroke="white" stroke-opacity=".06"/>`;
+  grid+=`<text x="${M.l-10}" y="${y+4}" text-anchor="end" fill="white" fill-opacity=".4" font-size="11">${fmt(v)}</text>`;}
+
+  let bars='',cum=0;
+  D.forEach(({name,value},i)=>{
+    const x=M.l+i*gap+(gap-bw)/2,bH=sc(value),y=M.t+sc(TOTAL-cum-value);
+    cum+=value;const cy=M.t+sc(TOTAL-cum);
+    bars+=`<g class="bar" data-n="${name}" data-v="${value}">`;
+    bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(bH,1)}" rx="3" fill="url(#bg)"/>`;
+    bars+=`<text x="${x+bw/2}" y="${y-6}" text-anchor="middle" fill="white" fill-opacity=".7" font-size="10">${fmt(value)}</text>`;
+    if(i<D.length-1){const nx=M.l+(i+1)*gap+(gap-bw)/2;
+    bars+=`<line x1="${x+bw}" x2="${nx}" y1="${cy}" y2="${cy}" stroke="white" stroke-opacity=".15" stroke-dasharray="3,3"/>`;}
+    bars+=`<text x="${x+bw/2}" y="${M.t+cH+16}" text-anchor="end" fill="white" fill-opacity=".6" font-size="11" transform="rotate(-45,${x+bw/2},${M.t+cH+16})">${name}</text>`;
+    bars+=`</g>`;
+  });
+
+  const lastX=M.l+(D.length-1)*gap+(gap-bw)/2;
+  const tX=M.l+D.length*gap+(gap-bw)/2;
+  const lastCy=M.t+sc(TOTAL-cum);
+  bars+=`<line x1="${lastX+bw}" x2="${tX}" y1="${lastCy}" y2="${lastCy}" stroke="white" stroke-opacity=".15" stroke-dasharray="3,3"/>`;
+
+  const tH=sc(TOTAL),tY=M.t+cH-tH;
+  bars+=`<g class="bar" data-n="Total" data-v="${TOTAL}">`;
+  bars+=`<rect x="${tX}" y="${tY}" width="${bw}" height="${tH}" rx="3" fill="url(#tg)"/>`;
+  bars+=`<text x="${tX+bw/2}" y="${tY-6}" text-anchor="middle" fill="white" fill-opacity=".9" font-size="12" font-weight="700">${fmt(TOTAL)}</text>`;
+  bars+=`<text x="${tX+bw/2}" y="${M.t+cH+16}" text-anchor="end" fill="white" fill-opacity=".8" font-size="12" font-weight="700" transform="rotate(-45,${tX+bw/2},${M.t+cH+16})">Total</text>`;
+  bars+=`</g>`;
+
+  svg.innerHTML=defs+grid+bars;
+  svg.querySelectorAll('.bar').forEach(g=>{
+    g.addEventListener('mousemove',e=>{const r=cw.getBoundingClientRect();tn.textContent=g.dataset.n;tv.textContent=fmtF(+g.dataset.v);tip.style.left=(e.clientX-r.left+12)+'px';tip.style.top=(e.clientY-r.top-40)+'px';tip.classList.add('show');});
+    g.addEventListener('mouseleave',()=>tip.classList.remove('show'));
+  });
+}
+
+async function load(){
+  loader.style.display='block';svg.style.display='none';
+  try{
+    const data=await fetchData();
+    loader.style.display='none';svg.style.display='block';
+    draw(data);
+    document.getElementById('ts').textContent='Last updated: '+new Date().toLocaleTimeString();
+  }catch(e){
+    loader.innerHTML=`<div class="error">⚠ ${e.message}<br><br><button class="refresh" onclick="load()">Retry</button></div>`;
+  }
+}
+
+load();
+window.addEventListener('resize',()=>{if(svg.style.display!=='none')load()});
+// Auto-refresh every 30 seconds
+setInterval(load,30000);
+</script>
+</body>
+</html>
