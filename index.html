@@ -27,6 +27,7 @@ canvas{width:100%;height:auto}
 .legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;padding:0 4px}
 .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;opacity:.6}
 .legend-dot{width:10px;height:10px;border-radius:3px}
+.legend-line{width:16px;height:0;border-top:2px dashed}
 </style>
 </head>
 <body>
@@ -57,14 +58,13 @@ const tv=document.getElementById('tv');
 const tbd=document.getElementById('tbd');
 const loader=document.getElementById('loader');
 
-// Fixed additional items (different colors)
+const OBJECTIVE=500_000_000;
+
 const EXTRA_ITEMS=[
   {name:'Bridge Pre-Load Wallets',value:100_000_000,color:['#f472b6','#db2777']},
   {name:'Axiym',value:200_000_000,color:['#c084fc','#9333ea']},
-  {name:'Objective',value:500_000_000,color:['#fbbf24','#d97706']},
 ];
 
-// Collapse threshold — items below this get grouped into "Other"
 const COLLAPSE_THRESHOLD=1_000_000;
 
 let chartData=null;
@@ -102,24 +102,19 @@ async function fetchData(){
 }
 
 function buildChartItems(raw){
-  // Split into big and small
   const big=raw.filter(d=>d.value>=COLLAPSE_THRESHOLD);
   const small=raw.filter(d=>d.value<COLLAPSE_THRESHOLD);
-
   const items=[];
 
-  // Big pipeline items (green)
   for(const d of big){
     items.push({name:d.name,value:d.value,type:'pipeline',color:['#34d399','#059669']});
   }
 
-  // Collapsed "Other" if any
   if(small.length>0){
     const otherVal=small.reduce((s,d)=>s+d.value,0);
     items.push({name:`Other (${small.length})`,value:otherVal,type:'pipeline',color:['#34d399','#059669'],breakdown:small});
   }
 
-  // Extra items
   for(const e of EXTRA_ITEMS){
     items.push({name:e.name,value:e.value,type:'extra',color:e.color});
   }
@@ -143,20 +138,32 @@ function draw(items){
   ctx.clearRect(0,0,W,H);
 
   const cW=W-M.l-M.r,cH=H-M.t-M.b;
+  // Scale Y-axis to max of OBJECTIVE or TOTAL, with 10% headroom
+  const maxY=Math.max(OBJECTIVE,TOTAL)*1.1;
   const n=items.length+1,gap=cW/n,bw=Math.min(gap*.65,48);
-  const sc=v=>(v/TOTAL)*cH;
+  const sc=v=>(v/maxY)*cH;
 
   chartBars=[];
 
-  // Grid
+  // Grid lines
   ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=1;
   ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font='11px -apple-system,system-ui,sans-serif';
   ctx.textAlign='right';
   for(let i=0;i<=5;i++){
-    const v=TOTAL/5*i,y=M.t+cH-sc(v);
+    const v=maxY/5*i,y=M.t+cH-sc(v);
     ctx.beginPath();ctx.moveTo(M.l,y);ctx.lineTo(W-M.r,y);ctx.stroke();
     ctx.fillText(fmt(v),M.l-10,y+4);
   }
+
+  // === OBJECTIVE LINE ===
+  const objY=M.t+cH-sc(OBJECTIVE);
+  ctx.strokeStyle='#fbbf24';ctx.lineWidth=2;ctx.setLineDash([8,6]);
+  ctx.beginPath();ctx.moveTo(M.l,objY);ctx.lineTo(W-M.r,objY);ctx.stroke();
+  ctx.setLineDash([]);
+  // Label
+  ctx.fillStyle='#fbbf24';ctx.font='bold 12px -apple-system,system-ui,sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('Objective: $500M',W-M.r-140,objY-8);
 
   // Bars
   let cum=0;
@@ -164,11 +171,10 @@ function draw(items){
   items.forEach((item,i)=>{
     const x=M.l+i*gap+(gap-bw)/2;
     const bH=Math.max(sc(item.value),2);
-    const y=M.t+sc(TOTAL-cum-item.value);
+    const y=M.t+cH-sc(cum+item.value);
     cum+=item.value;
-    const connY=M.t+sc(TOTAL-cum);
+    const connY=M.t+cH-sc(cum);
 
-    // Gradient for this bar
     const grad=ctx.createLinearGradient(0,y,0,y+bH);
     grad.addColorStop(0,item.color[0]);grad.addColorStop(1,item.color[1]);
     ctx.fillStyle=grad;
@@ -187,7 +193,7 @@ function draw(items){
       ctx.setLineDash([]);
     }
 
-    // X label (rotated)
+    // X label
     ctx.save();
     ctx.translate(x+bw/2,M.t+cH+14);ctx.rotate(-Math.PI/4);
     ctx.fillStyle=item.type==='extra'?'rgba(255,255,255,0.8)':'rgba(255,255,255,0.6)';
@@ -200,21 +206,26 @@ function draw(items){
 
   // Connector last -> total
   const lastX=M.l+(items.length-1)*gap+(gap-bw)/2;
-  const lastConnY=M.t+sc(TOTAL-cum);
+  const lastConnY=M.t+cH-sc(cum);
   const tX=M.l+items.length*gap+(gap-bw)/2;
   ctx.strokeStyle='rgba(255,255,255,0.12)';ctx.setLineDash([3,3]);ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(lastX+bw,lastConnY);ctx.lineTo(tX,lastConnY);ctx.stroke();
   ctx.setLineDash([]);
 
-  // Total bar
+  // Total bar (from 0)
   const tH=sc(TOTAL),tY=M.t+cH-tH;
   const totalGrad=ctx.createLinearGradient(0,tY,0,tY+tH);
   totalGrad.addColorStop(0,'#60a5fa');totalGrad.addColorStop(1,'#2563eb');
   ctx.fillStyle=totalGrad;
   roundRect(ctx,tX,tY,bw,tH,3);ctx.fill();
 
+  // Total value + % of objective
+  const pct=Math.round(TOTAL/OBJECTIVE*100);
   ctx.fillStyle='rgba(255,255,255,0.95)';ctx.font='bold 12px -apple-system,system-ui,sans-serif';
-  ctx.textAlign='center';ctx.fillText(fmt(TOTAL),tX+bw/2,tY-6);
+  ctx.textAlign='center';
+  ctx.fillText(fmt(TOTAL),tX+bw/2,tY-18);
+  ctx.fillStyle='rgba(255,255,255,0.5)';ctx.font='11px -apple-system,system-ui,sans-serif';
+  ctx.fillText(`${pct}% of target`,tX+bw/2,tY-6);
 
   ctx.save();
   ctx.translate(tX+bw/2,M.t+cH+14);ctx.rotate(-Math.PI/4);
@@ -228,15 +239,19 @@ function draw(items){
   const legend=document.getElementById('legend');
   legend.innerHTML='';
   const legendItems=[
-    {label:'Pipeline (spreadsheet)',color:'#34d399'},
-    {label:'Bridge Pre-Load Wallets',color:'#f472b6'},
-    {label:'Axiym',color:'#c084fc'},
-    {label:'Objective',color:'#fbbf24'},
-    {label:'Total',color:'#60a5fa'},
+    {label:'Pipeline (spreadsheet)',color:'#34d399',type:'dot'},
+    {label:'Bridge Pre-Load Wallets',color:'#f472b6',type:'dot'},
+    {label:'Axiym',color:'#c084fc',type:'dot'},
+    {label:'Total',color:'#60a5fa',type:'dot'},
+    {label:'Objective ($500M)',color:'#fbbf24',type:'line'},
   ];
   for(const l of legendItems){
     const d=document.createElement('div');d.className='legend-item';
-    d.innerHTML=`<div class="legend-dot" style="background:${l.color}"></div>${l.label}`;
+    if(l.type==='line'){
+      d.innerHTML=`<div class="legend-line" style="border-color:${l.color}"></div>${l.label}`;
+    }else{
+      d.innerHTML=`<div class="legend-dot" style="background:${l.color}"></div>${l.label}`;
+    }
     legend.appendChild(d);
   }
 }
@@ -250,7 +265,6 @@ function roundRect(ctx,x,y,w,h,r){
   ctx.closePath();
 }
 
-// Tooltip on hover
 canvas.addEventListener('mousemove',e=>{
   const rect=canvas.getBoundingClientRect();
   const scaleX=canvas.width/(window.devicePixelRatio||1)/rect.width;
