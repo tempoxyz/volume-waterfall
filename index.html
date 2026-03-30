@@ -28,6 +28,11 @@ h1{font-size:22px;font-weight:700;margin-bottom:4px;opacity:.9}
 .refresh{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:rgba(255,255,255,.6);font-size:12px;cursor:pointer;transition:background .15s}
 .refresh:hover{background:rgba(255,255,255,.14)}
 .midmarket-sum{font-size:13px;color:#34d399;font-weight:600;margin-left:4px}
+.extra-inputs{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px}
+.input-group{display:flex;align-items:center;gap:6px;font-size:13px;color:rgba(255,255,255,.6)}
+.input-group input{width:56px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:6px;color:#fff;font-size:13px;padding:5px 8px;text-align:right;font-variant-numeric:tabular-nums}
+.input-group input:focus{outline:none;border-color:rgba(255,255,255,.35)}
+.input-dot{width:8px;height:8px;border-radius:3px;flex-shrink:0}
 .ts{font-size:11px;opacity:.25;margin-top:8px}
 canvas{width:100%;height:auto}
 .legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;padding:0 4px}
@@ -47,6 +52,10 @@ canvas{width:100%;height:auto}
 </div>
 <button class="refresh" onclick="load()">↻ Refresh</button>
 <span class="midmarket-sum" id="midmarket-sum"></span>
+</div>
+<div class="extra-inputs">
+<label class="input-group"><span class="input-dot" style="background:#f472b6"></span>Bridge Pre-Load Wallets<input type="text" id="input-bridge" value="100" data-key="bridge">M</label>
+<label class="input-group"><span class="input-dot" style="background:#c084fc"></span>Axiym<input type="text" id="input-axiym" value="200" data-key="axiym">M</label>
 </div>
 <div class="chart-wrap" id="cw">
 <div class="tip" id="tip"><b id="tn"></b><span id="tv"></span><div class="breakdown" id="tbd" style="display:none"></div></div>
@@ -71,10 +80,14 @@ const loader=document.getElementById('loader');
 
 const OBJECTIVE=500_000_000;
 
-const EXTRA_ITEMS=[
-  {name:'Bridge Pre-Load Wallets',value:100_000_000,color:['#f472b6','#db2777']},
-  {name:'Axiym',value:200_000_000,color:['#c084fc','#9333ea']},
-];
+function getExtraItems(){
+  const bridgeVal=parseFloat(document.getElementById('input-bridge').value)||0;
+  const axiymVal=parseFloat(document.getElementById('input-axiym').value)||0;
+  const items=[];
+  if(bridgeVal>0) items.push({name:'Bridge Pre-Load Wallets',value:bridgeVal*1_000_000,color:['#f472b6','#db2777']});
+  if(axiymVal>0) items.push({name:'Axiym',value:axiymVal*1_000_000,color:['#c084fc','#9333ea']});
+  return items;
+}
 
 const COLLAPSE_THRESHOLD=1_000_000;
 
@@ -144,7 +157,7 @@ function buildChartItems(filtered){
     items.push({name:`Other (${small.length})`,value:otherVal,type:'pipeline',color:['#34d399','#059669'],breakdown:small});
   }
 
-  for(const e of EXTRA_ITEMS){
+  for(const e of getExtraItems()){
     items.push({name:e.name,value:e.value,type:'extra',color:e.color});
   }
 
@@ -336,6 +349,11 @@ async function load(){
     loader.innerHTML='<div style="color:#f87171;padding:40px">⚠ '+e.message+'<br><br><button class="refresh" onclick="load()">Retry</button></div>';
   }
 }
+
+// Redraw on input change
+document.querySelectorAll('.extra-inputs input').forEach(inp=>{
+  inp.addEventListener('input',()=>{if(rawData)redraw()});
+});
 
 load();
 window.addEventListener('resize',()=>{if(chartData)redraw()});
