@@ -9,6 +9,11 @@ body{background:#0a0a0f;color:#fff;font-family:-apple-system,system-ui,sans-seri
 .wrap{max-width:1200px;width:100%}
 h1{font-size:22px;font-weight:700;margin-bottom:4px;opacity:.9}
 .sub{font-size:13px;opacity:.35;margin-bottom:24px}
+.controls{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.toggle{display:flex;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;overflow:hidden}
+.toggle button{padding:7px 18px;font-size:13px;font-weight:500;color:rgba(255,255,255,.5);background:none;border:none;cursor:pointer;transition:all .15s}
+.toggle button.active{background:rgba(255,255,255,.12);color:#fff}
+.toggle button:hover:not(.active){background:rgba(255,255,255,.06)}
 .chart-wrap{background:#12121a;border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow-x:auto;position:relative;padding:16px}
 .tip{position:absolute;pointer-events:none;background:#1e1e2e;border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:10px 14px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);opacity:0;transition:opacity .15s;z-index:10;max-width:280px}
 .tip.show{opacity:1}
@@ -20,7 +25,7 @@ h1{font-size:22px;font-weight:700;margin-bottom:4px;opacity:.9}
 .tip .breakdown .bval{color:rgba(255,255,255,.9);font-variant-numeric:tabular-nums}
 .foot{margin-top:20px;font-size:11px;opacity:.2}
 .loading{text-align:center;padding:80px 0;opacity:.5;font-size:14px}
-.refresh{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:rgba(255,255,255,.6);font-size:12px;cursor:pointer;transition:background .15s;margin-left:16px}
+.refresh{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:rgba(255,255,255,.6);font-size:12px;cursor:pointer;transition:background .15s}
 .refresh:hover{background:rgba(255,255,255,.14)}
 .ts{font-size:11px;opacity:.25;margin-top:8px}
 canvas{width:100%;height:auto}
@@ -32,11 +37,15 @@ canvas{width:100%;height:auto}
 </head>
 <body>
 <div class="wrap">
-<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
-<h1>Pipeline Volume (3mo) — Waterfall</h1>
+<h1>Pipeline Volume (1mo) — Waterfall</h1>
+<p class="sub">Live from spreadsheet · Column B (Customer) × Column F (Volume)</p>
+<div class="controls">
+<div class="toggle" id="toggle">
+<button class="active" data-filter="all">All</button>
+<button data-filter="committed">Committed</button>
+</div>
 <button class="refresh" onclick="load()">↻ Refresh</button>
 </div>
-<p class="sub">Live from spreadsheet · Column B (Customer) × Column F (Volume 3mo)</p>
 <div class="chart-wrap" id="cw">
 <div class="tip" id="tip"><b id="tn"></b><span id="tv"></span><div class="breakdown" id="tbd" style="display:none"></div></div>
 <div class="loading" id="loader">Loading spreadsheet data…</div>
@@ -67,8 +76,20 @@ const EXTRA_ITEMS=[
 
 const COLLAPSE_THRESHOLD=1_000_000;
 
+let rawData=null;
 let chartData=null;
 let chartBars=[];
+let activeFilter='all';
+
+// Toggle buttons
+document.getElementById('toggle').addEventListener('click',e=>{
+  const btn=e.target.closest('button[data-filter]');
+  if(!btn) return;
+  activeFilter=btn.dataset.filter;
+  document.querySelectorAll('#toggle button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  if(rawData) redraw();
+});
 
 function parseCSV(text){
   const rows=[];let row=[],field='',inQ=false;
@@ -95,15 +116,21 @@ async function fetchData(){
     let valStr=row[5]?.trim();
     if(!name||!valStr||valStr==='$0'||valStr==='N/A'||valStr==='') continue;
     const val=parseFloat(valStr.replace(/[$,]/g,''));
-    if(!isNaN(val)&&val>0) data.push({name,value:val});
+    const status=(row[11]||'').trim().toLowerCase();
+    if(!isNaN(val)&&val>0) data.push({name,value:val,status});
   }
   data.sort((a,b)=>b.value-a.value);
   return data;
 }
 
-function buildChartItems(raw){
-  const big=raw.filter(d=>d.value>=COLLAPSE_THRESHOLD);
-  const small=raw.filter(d=>d.value<COLLAPSE_THRESHOLD);
+function filterData(raw){
+  if(activeFilter==='committed') return raw.filter(d=>d.status==='committed');
+  return raw;
+}
+
+function buildChartItems(filtered){
+  const big=filtered.filter(d=>d.value>=COLLAPSE_THRESHOLD);
+  const small=filtered.filter(d=>d.value<COLLAPSE_THRESHOLD);
   const items=[];
 
   for(const d of big){
@@ -138,14 +165,13 @@ function draw(items){
   ctx.clearRect(0,0,W,H);
 
   const cW=W-M.l-M.r,cH=H-M.t-M.b;
-  // Scale Y-axis to max of OBJECTIVE or TOTAL, with 10% headroom
   const maxY=Math.max(OBJECTIVE,TOTAL)*1.1;
   const n=items.length+1,gap=cW/n,bw=Math.min(gap*.65,48);
   const sc=v=>(v/maxY)*cH;
 
   chartBars=[];
 
-  // Grid lines
+  // Grid
   ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=1;
   ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font='11px -apple-system,system-ui,sans-serif';
   ctx.textAlign='right';
@@ -155,12 +181,11 @@ function draw(items){
     ctx.fillText(fmt(v),M.l-10,y+4);
   }
 
-  // === OBJECTIVE LINE ===
+  // Objective line
   const objY=M.t+cH-sc(OBJECTIVE);
   ctx.strokeStyle='#fbbf24';ctx.lineWidth=2;ctx.setLineDash([8,6]);
   ctx.beginPath();ctx.moveTo(M.l,objY);ctx.lineTo(W-M.r,objY);ctx.stroke();
   ctx.setLineDash([]);
-  // Label
   ctx.fillStyle='#fbbf24';ctx.font='bold 12px -apple-system,system-ui,sans-serif';
   ctx.textAlign='left';
   ctx.fillText('Objective: $500M',W-M.r-140,objY-8);
@@ -180,12 +205,10 @@ function draw(items){
     ctx.fillStyle=grad;
     roundRect(ctx,x,y,bw,bH,3);ctx.fill();
 
-    // Value label
     ctx.fillStyle='rgba(255,255,255,0.75)';
     ctx.font='bold 10px -apple-system,system-ui,sans-serif';ctx.textAlign='center';
     ctx.fillText(fmt(item.value),x+bw/2,y-6);
 
-    // Connector
     if(i<items.length-1){
       const nx=M.l+(i+1)*gap+(gap-bw)/2;
       ctx.strokeStyle='rgba(255,255,255,0.12)';ctx.setLineDash([3,3]);ctx.lineWidth=1;
@@ -193,7 +216,6 @@ function draw(items){
       ctx.setLineDash([]);
     }
 
-    // X label
     ctx.save();
     ctx.translate(x+bw/2,M.t+cH+14);ctx.rotate(-Math.PI/4);
     ctx.fillStyle=item.type==='extra'?'rgba(255,255,255,0.8)':'rgba(255,255,255,0.6)';
@@ -212,14 +234,13 @@ function draw(items){
   ctx.beginPath();ctx.moveTo(lastX+bw,lastConnY);ctx.lineTo(tX,lastConnY);ctx.stroke();
   ctx.setLineDash([]);
 
-  // Total bar (from 0)
+  // Total bar
   const tH=sc(TOTAL),tY=M.t+cH-tH;
   const totalGrad=ctx.createLinearGradient(0,tY,0,tY+tH);
   totalGrad.addColorStop(0,'#60a5fa');totalGrad.addColorStop(1,'#2563eb');
   ctx.fillStyle=totalGrad;
   roundRect(ctx,tX,tY,bw,tH,3);ctx.fill();
 
-  // Total value + % of objective
   const pct=Math.round(TOTAL/OBJECTIVE*100);
   ctx.fillStyle='rgba(255,255,255,0.95)';ctx.font='bold 12px -apple-system,system-ui,sans-serif';
   ctx.textAlign='center';
@@ -239,7 +260,7 @@ function draw(items){
   const legend=document.getElementById('legend');
   legend.innerHTML='';
   const legendItems=[
-    {label:'Pipeline (spreadsheet)',color:'#34d399',type:'dot'},
+    {label:'Mid-market',color:'#34d399',type:'dot'},
     {label:'Bridge Pre-Load Wallets',color:'#f472b6',type:'dot'},
     {label:'Axiym',color:'#c084fc',type:'dot'},
     {label:'Total',color:'#60a5fa',type:'dot'},
@@ -291,14 +312,19 @@ canvas.addEventListener('mousemove',e=>{
 });
 canvas.addEventListener('mouseleave',()=>tip.classList.remove('show'));
 
+function redraw(){
+  const filtered=filterData(rawData);
+  const items=buildChartItems(filtered);
+  chartData=items;
+  draw(items);
+}
+
 async function load(){
   loader.style.display='block';canvas.style.display='none';
   try{
-    const raw=await fetchData();
-    const items=buildChartItems(raw);
-    chartData=items;
+    rawData=await fetchData();
     loader.style.display='none';canvas.style.display='block';
-    draw(items);
+    redraw();
     document.getElementById('ts').textContent='Last updated: '+new Date().toLocaleTimeString();
   }catch(e){
     loader.innerHTML='<div style="color:#f87171;padding:40px">⚠ '+e.message+'<br><br><button class="refresh" onclick="load()">Retry</button></div>';
@@ -306,7 +332,7 @@ async function load(){
 }
 
 load();
-window.addEventListener('resize',()=>{if(chartData)draw(chartData)});
+window.addEventListener('resize',()=>{if(chartData)redraw()});
 </script>
 </body>
 </html>
